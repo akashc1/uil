@@ -64,12 +64,12 @@ def _convert_to_rgb(image):
 
 
 def image_transform(
-        image_size: int,
-        is_train: bool,
-        mean=None,
-        std=None,
-        resize_longest_max: bool = False,
-        fill_color: int = 0,
+    image_size: int,
+    is_train: bool,
+    mean=None,
+    std=None,
+    resize_longest_max: bool = False,
+    fill_color: int = 0,
 ):
     mean = mean or OPENAI_DATASET_MEAN
     if not isinstance(mean, (list, tuple)):

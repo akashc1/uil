@@ -1,4 +1,10 @@
 wandb/
+#
+# vim placeholders
+*.swp
+
+# Ctags cache
+tags
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
