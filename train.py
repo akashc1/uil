@@ -159,7 +159,12 @@ def train_one_epoch(config, state, model_config, train_loader, rng):
     sample_digits = math.ceil(math.log(samples_per_epoch + 1, 10))
     num_samples = 0
 
-    p_train_step = jax.pmap(train_step, axis_name='batch', donate_argnums=(0,), static_broadcasted_argnums=(2,))
+    p_train_step = jax.pmap(
+        train_step,
+        axis_name='batch',
+        donate_argnums=(0,),
+        static_broadcasted_argnums=(2,),
+    )
 
     # replicate params and rng
     state = flax.jax_utils.replicate(state)
@@ -184,7 +189,6 @@ def train_one_epoch(config, state, model_config, train_loader, rng):
         percent_complete = num_samples / samples_per_epoch * 100
 
         state, (loss, _), rng = p_train_step(state, images, model_config, rng)
-        loss = jax.tree_map(lambda x: x[0], loss)
 
         batch_time_m.update(time.time() - end)
         end = time.time()
@@ -192,12 +196,13 @@ def train_one_epoch(config, state, model_config, train_loader, rng):
         if i % config.logging_interval == 0:
             samples_per_second = config.batch_size * world_size / batch_time_m.val
             samples_per_second_per_gpu = config.batch_size / batch_time_m.val
-            lr = learning_rate_fn(state.step)
+            lr = jax.tree_map(lambda x: x[0], learning_rate_fn(state.step))
+            loss = jax.tree_map(lambda x: x[0], loss)
             logging.info(
                 f"Train Epoch: {0} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
                 f"Data (t): {data_time_m.avg:.3f} "
                 f"Batch (t): {batch_time_m.avg:.3f}, {samples_per_second:#g}/s, {samples_per_second_per_gpu:#g}/s/xpu "
-                f"LR: {lr:5f} Loss: {loss.item():.4f}"
+                f"LR: {lr.item():5f} Loss: {loss.item():.4f}"
             )
             batch_time_m.reset()
             data_time_m.reset()

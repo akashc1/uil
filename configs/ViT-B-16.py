@@ -9,12 +9,12 @@ def get_config():
 
     # optimizer
     config.learning_rate = 3e-4
-    config.lr_warmup_steps = 1_000
+    config.lr_warmup_steps = 100
     config.lr_cosine_decay = True
     config.beta1 = 0.9
     config.beta2 = 0.95
     config.weight_decay = 0.05
-    config.batch_size = 128
+    config.batch_size = 2048
     config.epochs = 1
 
     # model
