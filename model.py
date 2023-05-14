@@ -1,8 +1,8 @@
-import flax.linen as nn
 from flax.core import frozen_dict
+import flax.linen as nn
+from flax.training import checkpoints
 import jax
 import jax.numpy as jnp
-from flax.training import checkpoints
 
 
 def unbatched_gather(x, ids_keep):

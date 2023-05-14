@@ -3,25 +3,21 @@ import pathlib
 import tempfile
 import time
 
+from absl import app, flags, logging
 import colorama
 import flax
+from flax.core import frozen_dict
 import flax.linen as nn
+from flax.training import checkpoints, train_state
 import jax
+from jax import lax
 import jax.numpy as jnp
+from ml_collections import config_flags
 import numpy as np
 import optax
 import wandb
 
-from absl import app
-from absl import flags
-from absl import logging
-from flax.core import frozen_dict
-from flax.training import train_state
-from flax.training import checkpoints
-from jax import lax
-from ml_collections import config_flags
-
-from data import image_transform, get_hf_image_dataset
+from data import get_hf_image_dataset, image_transform
 from model import UIL, UILClassifier
 
 Fore = colorama.Fore
