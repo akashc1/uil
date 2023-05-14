@@ -3,3 +3,8 @@ optax
 ml_collections
 distrax
 wandb
+colorama
+torch
+torchvision
+webdataset
+datasets

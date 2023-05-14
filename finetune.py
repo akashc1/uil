@@ -19,6 +19,7 @@ import wandb
 
 from data import get_hf_image_dataset, image_transform
 from model import UIL, UILClassifier
+from evaluate import batch_accuracy
 
 Fore = colorama.Fore
 Style = colorama.Style
@@ -112,19 +113,10 @@ def create_weight_decay_param_mask(p):
     return p
 
 
-def mae_loss(imgs, pred, mask, p):
-    target = patchify(imgs, p)
-    loss = (pred - target) ** 2
-    loss = loss.mean(axis=-1)
-    loss = (loss * mask).sum() / mask.sum()
-    return loss
-
-
 def ce_logits_loss(labels, logits):
     return optax.softmax_cross_entropy_with_integer_labels(logits, labels).mean()
 
 
-# @functools.partial(jax.jit, static_argnums=(2,))
 def train_step(state, images, labels, config, rng):
     rng = jax.random.fold_in(rng, state.step)
     dropout_rng, mask_rng = jax.random.split(rng)
@@ -145,16 +137,20 @@ def train_step(state, images, labels, config, rng):
     return state, (loss, pred), rng
 
 
-def train_one_epoch(config, state, model_config, train_loader, rng):
+def train_one_epoch(config, epoch, state, model_config, train_loader, test_loader, rng):
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
 
     learning_rate_fn = create_learning_rate_fn(config)
     world_size = jax.device_count()
-    samples_per_epoch = config.train_num_samples
+    samples_per_epoch = train_loader.num_samples
+    num_batches_per_epoch = train_loader.num_batches
+
     sample_digits = math.ceil(math.log(samples_per_epoch + 1, 10))
     num_samples = 0
+
+    test_loader_iter = iter(test_loader)
 
     p_train_step = jax.pmap(train_step, axis_name='batch', donate_argnums=(0,), static_broadcasted_argnums=(3,))
 
@@ -163,6 +159,8 @@ def train_one_epoch(config, state, model_config, train_loader, rng):
     rng = jax.random.split(rng, num=world_size)
 
     for i, batch in enumerate(train_loader):
+        step = num_batches_per_epoch * epoch + i
+
         images = batch['image']
         images = images.permute(0, 2, 3, 1).numpy()
         images = jnp.array(images, dtype=jnp.bfloat16)
@@ -192,14 +190,61 @@ def train_one_epoch(config, state, model_config, train_loader, rng):
             samples_per_second = config.batch_size * world_size / batch_time_m.val
             samples_per_second_per_gpu = config.batch_size / batch_time_m.val
             lr = jax.tree_map(lambda x: x[0], learning_rate_fn(state.step))
+
+            dedup_state = flax.jax_utils.unreplicate(state)
+            single_rng = jax.random.fold_in(rng[0], state.step[0])
+            dropout_rng, mask_rng = jax.random.split(single_rng)
+            images, labels = images[0], labels[0]  # Just take the first device's batch
+            logits = UILClassifier(**model_config).apply(
+                {'params': dedup_state.params},
+                images,
+                mask_rng,
+                rngs={'dropout': dropout_rng},
+            )
+            tr_acc = batch_accuracy(logits, labels)
+
+            test_batch = next(test_loader_iter)
+            images = test_batch['image'].permute(0, 2, 3, 1).numpy()
+            images = np.array(images, dtype=jnp.bfloat16)
+            labels = jnp.array(test_batch['label'].numpy(), dtype=jnp.uint8)
+            logits = UILClassifier(**model_config).apply(
+                {'params': dedup_state.params},
+                images,
+                mask_rng,
+                rngs={'dropout': dropout_rng},
+            )
+            ts_acc = batch_accuracy(logits, labels)
+
+            del logits, test_batch
+
             logging.info(
-                f"Train Epoch: {0} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
+                f"Train Epoch: {epoch} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
                 f"Data (t): {data_time_m.avg:.3f} "
                 f"Batch (t): {batch_time_m.avg:.3f}, {samples_per_second:#g}/s, {samples_per_second_per_gpu:#g}/s/xpu "
-                f"LR: {lr:5f} Loss: {loss.item():.4f}"
+                f"LR: {lr:5f} Loss: {loss.item():.4f} Tr acc: {tr_acc:.4f} Ts acc: {ts_acc:.4f}"
             )
+
+            # Save train loss / etc. Using non avg meter values as loggers have their own smoothing
+            log_data = {
+                "data_time": data_time_m.val,
+                "batch_time": batch_time_m.val,
+                "samples_per_second": samples_per_second,
+                "samples_per_second_per_gpu": samples_per_second_per_gpu,
+                "lr": lr.item(),
+                "cls_loss": loss.item(),
+                "train/acc": tr_acc,
+                "test/acc": ts_acc,
+            }
+
+            for name, val in log_data.items():
+                if config.wandb:
+                    assert wandb is not None, 'Please install wandb.'
+                    wandb.log({name: val, 'step': step})
+
             batch_time_m.reset()
             data_time_m.reset()
+
+        del images, labels
 
     state = flax.jax_utils.unreplicate(state)
     return state
@@ -264,17 +309,32 @@ def train(config):
     logging.info(tabulate_fn(fake_img, tabulate_rng))
 
     # data
-    preprocess_train = image_transform(config.image_size, is_train=True)
     train_loader = get_hf_image_dataset(
         data=config.train_data,
-        preprocess_fn=preprocess_train,
+        split='train',
+        preprocess_fn=image_transform(config.image_size, is_train=True),
         batch_size=config.batch_size,
         num_workers=config.num_workers,
         image_key=config.image_key,
     )
+    test_loader = get_hf_image_dataset(
+        data=config.train_data,
+        split='test',
+        preprocess_fn=image_transform(config.image_size, is_train=False),
+        batch_size=config.batch_size // jax.device_count(),  # Just using one device for eval
+        num_workers=config.num_workers // jax.device_count(),
+        image_key=config.image_key,
+    )
 
-    for epoch in range(1):
-        state = train_one_epoch(config, state, classifier_config, train_loader, rng)
+    for epoch in range(config.epochs):
+        state = train_one_epoch(
+            config,
+            epoch,
+            state,
+            classifier_config,
+            train_loader,
+            test_loader,
+            rng)
         checkpoints.save_checkpoint(
             ckpt_dir, state, epoch, keep=float('inf')
         )

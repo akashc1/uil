@@ -204,13 +204,13 @@ def get_wds(*, data, preprocess_fn, batch_size, num_workers):
     return dataloader
 
 
-def get_hf_image_dataset(*, data, preprocess_fn, batch_size, num_workers, image_key):
+def get_hf_image_dataset(*, data, split, preprocess_fn, batch_size, num_workers, image_key):
     dataset_name = data
     assert dataset_name
 
     dataset = HFImageDataset(
         dataset_name,
-        split='train',
+        split=split,
         transforms=preprocess_fn,
         image_key=image_key,
     )
