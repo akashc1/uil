@@ -9,13 +9,13 @@ def get_config():
 
     # optimizer
     config.learning_rate = 3e-4
-    config.lr_warmup_steps = 100
+    config.lr_warmup_steps = 500
     config.lr_cosine_decay = True
     config.beta1 = 0.9
     config.beta2 = 0.95
     config.weight_decay = 0.05
     config.batch_size = 2048
-    config.epochs = 1
+    config.epochs = 10
 
     # model
     config.width = 768
@@ -25,9 +25,9 @@ def get_config():
     config.patch_size = 16
 
     config.mask_ratio = 0.75
-    config.decoder_layers=8
-    config.decoder_width=512
-    config.decoder_heads=16
+    config.decoder_layers = 8
+    config.decoder_width = 512
+    config.decoder_heads = 16
 
     config.attn_dropout_rate = 0
     config.dropout_rate = 0
@@ -40,11 +40,11 @@ def get_config():
     config.train_num_samples = 1281167
 
     # dataloader
-    config.num_workers = 20
+    config.num_workers = 48
 
     # logging
     config.wandb = False
-    config.logging_interval = 1 #50
+    config.logging_interval = 5
     config.eval_interval = 500
     config.ckpt_interval = 1000
 

@@ -265,7 +265,7 @@ def train(config):
         num_workers=config.num_workers,
     )
 
-    for epoch in range(1):
+    for epoch in range(config.epochs):
         state = train_one_epoch(config, state, model_config, train_loader, rng)
         checkpoints.save_checkpoint(
             ckpt_dir, state, epoch, keep=float('inf')
