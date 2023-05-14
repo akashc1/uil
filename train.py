@@ -269,7 +269,9 @@ def train(config):
     )
     state = train_state.TrainState.create(apply_fn=model.apply, params=params, tx=tx)
     ckpt_dir = pathlib.Path(workdir) / 'checkpoints'
-    state = checkpoints.restore_checkpoint(ckpt_dir, state)
+
+    # parallel checkpoint loading seems to break
+    state = checkpoints.restore_checkpoint(ckpt_dir, state, parallel=False)
 
     # print model
     rng, tabulate_rng = jax.random.split(rng)
@@ -283,6 +285,7 @@ def train(config):
         preprocess_fn=preprocess_train,
         batch_size=config.batch_size,
         num_workers=config.num_workers,
+        image_key=config.image_key,
     )
 
     for epoch in range(config.epochs):
@@ -290,6 +293,7 @@ def train(config):
         checkpoints.save_checkpoint(
             ckpt_dir, state, epoch, keep=float('inf')
         )
+        logging.info(f"Saved checkpoint for epoch {epoch + 1} to {ckpt_dir}")
 
     return state
 

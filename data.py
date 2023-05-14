@@ -14,7 +14,7 @@ OPENAI_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
 
 
 class HFImageDataset(Dataset):
-    def __init__(self, name, split, transforms, image_key):
+    def __init__(self, name, split, transforms, image_key, label_key='label'):
         try:
             from datasets import load_dataset
         except ImportError:
@@ -23,6 +23,7 @@ class HFImageDataset(Dataset):
         self.df = load_dataset(name, split=split)
         self.size = len(self.df)
         self.image_key = image_key
+        self.label_key = label_key
         self.transforms = transforms
 
     def __len__(self):
@@ -30,7 +31,7 @@ class HFImageDataset(Dataset):
 
     def __getitem__(self, idx):
         image = self.transforms(self.df[idx][self.image_key])
-        return {'image': image}
+        return {'image': image, 'label': self.df[idx][self.label_key]}
 
 
 class ResizeMaxSize(nn.Module):
@@ -196,11 +197,16 @@ def get_wds(*, data, preprocess_fn, batch_size, num_workers):
     return dataloader
 
 
-def get_hf_image_dataset(*, data, preprocess_fn, batch_size, num_workers):
+def get_hf_image_dataset(*, data, preprocess_fn, batch_size, num_workers, image_key):
     dataset_name = data
     assert dataset_name
 
-    dataset = HFImageDataset(dataset_name, split='train', transforms=preprocess_fn, image_key='image')
+    dataset = HFImageDataset(
+        dataset_name,
+        split='train',
+        transforms=preprocess_fn,
+        image_key=image_key,
+    )
     num_samples = len(dataset)
     dataloader = DataLoader(
         dataset,

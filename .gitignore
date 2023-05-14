@@ -1,5 +1,11 @@
 wandb/
-#
+
+# checkpoints
+ckpts
+
+# wandb logs
+wandb
+
 # vim placeholders
 *.swp
 
