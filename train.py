@@ -202,7 +202,7 @@ def train_one_epoch(config, epoch, state, model_config, train_loader, rng):
             lr = jax.tree_map(lambda x: x[0], learning_rate_fn(state.step))
             loss = jnp.mean(loss)
             logging.info(
-                f"Train Epoch: {0} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
+                f"Train Epoch: {epoch} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
                 f"Data (t): {data_time_m.avg:.3f} "
                 f"Batch (t): {batch_time_m.avg:.3f}, {samples_per_second:#g}/s, {samples_per_second_per_gpu:#g}/s/xpu "
                 f"LR: {lr.item():5f} Loss: {loss.item():.4f}"
