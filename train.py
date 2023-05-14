@@ -148,7 +148,7 @@ def train_step(state, images, config, rng):
     return state, (loss, pred), rng
 
 
-def train_one_epoch(config, state, model_config, train_loader, rng):
+def train_one_epoch(config, epoch, state, model_config, train_loader, rng):
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
@@ -156,6 +156,7 @@ def train_one_epoch(config, state, model_config, train_loader, rng):
     learning_rate_fn = create_learning_rate_fn(config)
     world_size = jax.device_count()
     samples_per_epoch = config.train_num_samples
+    num_batches_per_epoch = samples_per_epoch // config.batch_size
     sample_digits = math.ceil(math.log(samples_per_epoch + 1, 10))
     num_samples = 0
 
@@ -171,6 +172,8 @@ def train_one_epoch(config, state, model_config, train_loader, rng):
     rng = jax.random.split(rng, num=world_size)
 
     for i, batch in enumerate(train_loader):
+        step = num_batches_per_epoch * epoch + i
+
         images = batch['image']
         images = images.permute(0, 2, 3, 1).numpy()
         images = jnp.array(images, dtype=jnp.bfloat16)
@@ -197,13 +200,30 @@ def train_one_epoch(config, state, model_config, train_loader, rng):
             samples_per_second = config.batch_size * world_size / batch_time_m.val
             samples_per_second_per_gpu = config.batch_size / batch_time_m.val
             lr = jax.tree_map(lambda x: x[0], learning_rate_fn(state.step))
-            loss = jax.tree_map(lambda x: x[0], loss)
+            loss = jnp.mean(loss)
             logging.info(
                 f"Train Epoch: {0} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
                 f"Data (t): {data_time_m.avg:.3f} "
                 f"Batch (t): {batch_time_m.avg:.3f}, {samples_per_second:#g}/s, {samples_per_second_per_gpu:#g}/s/xpu "
                 f"LR: {lr.item():5f} Loss: {loss.item():.4f}"
             )
+
+            # Save train loss / etc. Using non avg meter values as loggers have their own smoothing
+            log_data = {
+                "data_time": data_time_m.val,
+                "batch_time": batch_time_m.val,
+                "samples_per_second": samples_per_second,
+                "samples_per_second_per_gpu": samples_per_second_per_gpu,
+                "lr": lr.item(),
+                "mae_loss": loss.item(),
+            }
+
+            for name, val in log_data.items():
+                name = "train/" + name
+                if config.wandb:
+                    assert wandb is not None, 'Please install wandb.'
+                    wandb.log({name: val, 'step': step})
+
             batch_time_m.reset()
             data_time_m.reset()
 
@@ -266,7 +286,7 @@ def train(config):
     )
 
     for epoch in range(config.epochs):
-        state = train_one_epoch(config, state, model_config, train_loader, rng)
+        state = train_one_epoch(config, epoch, state, model_config, train_loader, rng)
         checkpoints.save_checkpoint(
             ckpt_dir, state, epoch, keep=float('inf')
         )
