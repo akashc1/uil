@@ -1,11 +1,18 @@
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import DataLoader, Dataset
+from torchvision.transforms import (
+    CenterCrop,
+    Compose,
+    InterpolationMode,
+    Normalize,
+    RandomResizedCrop,
+    Resize,
+    ToTensor,
+)
 import torchvision.transforms.functional as F
 import webdataset as wds
-from torchvision.transforms import Normalize, Compose, RandomResizedCrop, InterpolationMode, ToTensor, Resize, \
-    CenterCrop
-from webdataset.tariterators import base_plus_ext, url_opener, tar_file_expander, valid_sample
+from webdataset.tariterators import base_plus_ext, tar_file_expander, url_opener, valid_sample
 
 _SAMPLE_SHUFFLE_SIZE = 5000
 _SAMPLE_SHUFFLE_INITIAL = 1000
@@ -14,7 +21,7 @@ OPENAI_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
 
 
 class HFImageDataset(Dataset):
-    def __init__(self, name, split, transforms, image_key):
+    def __init__(self, name, split, transforms, image_key, label_key='label'):
         try:
             from datasets import load_dataset
         except ImportError:
@@ -23,6 +30,7 @@ class HFImageDataset(Dataset):
         self.df = load_dataset(name, split=split)
         self.size = len(self.df)
         self.image_key = image_key
+        self.label_key = label_key
         self.transforms = transforms
 
     def __len__(self):
@@ -30,7 +38,7 @@ class HFImageDataset(Dataset):
 
     def __getitem__(self, idx):
         image = self.transforms(self.df[idx][self.image_key])
-        return {'image': image}
+        return {'image': image, 'label': self.df[idx][self.label_key]}
 
 
 class ResizeMaxSize(nn.Module):
@@ -64,12 +72,12 @@ def _convert_to_rgb(image):
 
 
 def image_transform(
-        image_size: int,
-        is_train: bool,
-        mean=None,
-        std=None,
-        resize_longest_max: bool = False,
-        fill_color: int = 0,
+    image_size: int,
+    is_train: bool,
+    mean=None,
+    std=None,
+    resize_longest_max: bool = False,
+    fill_color: int = 0,
 ):
     mean = mean or OPENAI_DATASET_MEAN
     if not isinstance(mean, (list, tuple)):
@@ -196,11 +204,16 @@ def get_wds(*, data, preprocess_fn, batch_size, num_workers):
     return dataloader
 
 
-def get_hf_image_dataset(*, data, preprocess_fn, batch_size, num_workers):
+def get_hf_image_dataset(*, data, preprocess_fn, batch_size, num_workers, image_key):
     dataset_name = data
     assert dataset_name
 
-    dataset = HFImageDataset(dataset_name, split='train', transforms=preprocess_fn, image_key='image')
+    dataset = HFImageDataset(
+        dataset_name,
+        split='train',
+        transforms=preprocess_fn,
+        image_key=image_key,
+    )
     num_samples = len(dataset)
     dataloader = DataLoader(
         dataset,
