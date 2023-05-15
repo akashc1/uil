@@ -1,10 +1,13 @@
+from flax.core import frozen_dict
 import flax.linen as nn
+from flax.training import checkpoints
 import jax
 import jax.numpy as jnp
 
 
 def unbatched_gather(x, ids_keep):
     return x[ids_keep, Ellipsis]
+
 
 batched_gather = jax.vmap(unbatched_gather)
 
@@ -34,7 +37,7 @@ def get_2d_sincos_pos_embed_from_grid(embed_dim, grid):
     emb_h = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[0])  # (H*W, D/2)
     emb_w = get_1d_sincos_pos_embed_from_grid(embed_dim // 2, grid[1])  # (H*W, D/2)
 
-    emb = jnp.concatenate([emb_h, emb_w], axis=1) # (H*W, D)
+    emb = jnp.concatenate([emb_h, emb_w], axis=1)  # (H*W, D)
     return emb
 
 
@@ -52,8 +55,8 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
     pos = pos.reshape(-1)  # (M,)
     out = jnp.einsum('m,d->md', pos, omega)  # (M, D/2), outer product
 
-    emb_sin = jnp.sin(out) # (M, D/2)
-    emb_cos = jnp.cos(out) # (M, D/2)
+    emb_sin = jnp.sin(out)  # (M, D/2)
+    emb_cos = jnp.cos(out)  # (M, D/2)
 
     emb = jnp.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
     return emb
@@ -174,7 +177,11 @@ class UIL(nn.Module):
         ])
         self.dec_ln_pre = nn.LayerNorm(param_dtype=jnp.bfloat16)
         self.dec_ln_post = nn.LayerNorm(param_dtype=jnp.bfloat16)
-        self.decoder_pred = nn.Dense(self.patch_size**2 * 3, use_bias=True, param_dtype=jnp.bfloat16) # decoder to patch
+        self.decoder_pred = nn.Dense(
+            self.patch_size**2 * 3,
+            use_bias=True,
+            param_dtype=jnp.bfloat16,
+        )  # decoder to patch
 
         self.noise_pred = nn.Dense(self.patch_size**2 * 3, use_bias=True, param_dtype=jnp.bfloat16)
 
@@ -209,8 +216,10 @@ class UIL(nn.Module):
         # masking: length -> length * mask_ratio
         x, mask, ids_restore = self.random_masking(x, mask_ratio, rng)
 
-        cls_token = self.class_embedding.astype(x.dtype) + \
-                    self.positional_embedding[:1, :].astype(x.dtype)
+        cls_token = (
+            self.class_embedding.astype(x.dtype)
+            + self.positional_embedding[:1, :].astype(x.dtype)
+        )
         cls_token = jnp.broadcast_to(cls_token, (x.shape[0], 1, self.width))
         x = jnp.concatenate([cls_token, x], axis=1)
 
@@ -282,3 +291,47 @@ class UIL(nn.Module):
         latent, mask, ids_restore = self.encode_mae(x, self.mask_ratio, rng_mae)
         pred_mae = self.decode_mae(latent, ids_restore)
         return pred_mae, mask, pred_noise, true_noise
+
+
+class UILClassifier(nn.Module):
+    encoder: nn.Module
+
+    hidden_dim: int
+    n_layers: int
+    deterministic: bool
+
+    n_classes: int
+
+    dropout_rate: float = 0.0
+
+    def setup(self):
+        mlp_layers = sum(
+            (
+                [
+                    nn.Dense(self.hidden_dim, param_dtype=jnp.bfloat16),
+                    nn.gelu,
+                    nn.Dropout(
+                        self.dropout_rate,
+                        deterministic=self.deterministic
+                    ),
+                ]
+                for _ in range(self.n_layers)
+            ),
+            start=[]
+        )
+        self.mlp = nn.Sequential(mlp_layers)
+        self.class_head = nn.Dense(self.n_classes)
+
+    @staticmethod
+    def insert_pretrained_params(ckpt_path, params: frozen_dict.FrozenDict):
+        # Parallel loading seems broken
+        pretrained_params = checkpoints.restore_checkpoint(ckpt_path, None, parallel=False)['params']
+        params = params.unfreeze()
+        params['encoder'] = pretrained_params
+        return frozen_dict.freeze(params)
+
+    def __call__(self, x, rng):
+        x_encoded, _, _ = self.encoder.encode_image(x, 0.0, rng)
+        x_encoded = x_encoded.reshape((x_encoded.shape[0], -1))  # flatten
+        logits = self.class_head(self.mlp(x_encoded))
+        return logits
