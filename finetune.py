@@ -1,5 +1,6 @@
 import math
 import pathlib
+import shutil
 import tempfile
 import time
 
@@ -15,11 +16,11 @@ import jax.numpy as jnp
 from ml_collections import config_flags
 import numpy as np
 import optax
-import wandb
 
 from data import get_hf_image_dataset, image_transform
-from model import UIL, UILClassifier
 from evaluate import batch_accuracy
+from model import UIL, UILClassifier
+import wandb
 
 Fore = colorama.Fore
 Style = colorama.Style
@@ -191,6 +192,32 @@ def train_one_epoch(config, epoch, state, model_config, train_loader, test_loade
             samples_per_second_per_gpu = config.batch_size / batch_time_m.val
             lr = jax.tree_map(lambda x: x[0], learning_rate_fn(state.step))
 
+            logging.info(
+                f"Train Epoch: {epoch} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
+                f"Data (t): {data_time_m.avg:.3f} "
+                f"Batch (t): {batch_time_m.avg:.3f}, {samples_per_second:#g}/s, {samples_per_second_per_gpu:#g}/s/xpu "
+                f"LR: {lr:5f} Loss: {loss.item():.4f}"
+            )
+
+            # Save train loss / etc. Using non avg meter values as loggers have their own smoothing
+            log_data = {
+                "data_time": data_time_m.val,
+                "batch_time": batch_time_m.val,
+                "samples_per_second": samples_per_second,
+                "samples_per_second_per_gpu": samples_per_second_per_gpu,
+                "lr": lr.item(),
+                "cls_loss": loss.item(),
+            }
+
+            for name, val in log_data.items():
+                if config.wandb:
+                    assert wandb is not None, 'Please install wandb.'
+                    wandb.log({name: val, 'step': step})
+
+            batch_time_m.reset()
+            data_time_m.reset()
+
+        if i % config.eval_interval == 0:
             dedup_state = flax.jax_utils.unreplicate(state)
             single_rng = jax.random.fold_in(rng[0], state.step[0])
             dropout_rng, mask_rng = jax.random.split(single_rng)
@@ -219,30 +246,18 @@ def train_one_epoch(config, epoch, state, model_config, train_loader, test_loade
 
             logging.info(
                 f"Train Epoch: {epoch} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
-                f"Data (t): {data_time_m.avg:.3f} "
-                f"Batch (t): {batch_time_m.avg:.3f}, {samples_per_second:#g}/s, {samples_per_second_per_gpu:#g}/s/xpu "
-                f"LR: {lr:5f} Loss: {loss.item():.4f} Tr acc: {tr_acc:.4f} Ts acc: {ts_acc:.4f}"
+                f"step {step} train accuracy: {tr_acc:.4f} test accuracy: {ts_acc:.4f}"
             )
 
-            # Save train loss / etc. Using non avg meter values as loggers have their own smoothing
             log_data = {
-                "data_time": data_time_m.val,
-                "batch_time": batch_time_m.val,
-                "samples_per_second": samples_per_second,
-                "samples_per_second_per_gpu": samples_per_second_per_gpu,
-                "lr": lr.item(),
-                "cls_loss": loss.item(),
-                "train/acc": tr_acc,
-                "test/acc": ts_acc,
+                "train_acc": tr_acc,
+                "test_acc": ts_acc,
             }
 
             for name, val in log_data.items():
                 if config.wandb:
                     assert wandb is not None, 'Please install wandb.'
                     wandb.log({name: val, 'step': step})
-
-            batch_time_m.reset()
-            data_time_m.reset()
 
         del images, labels
 
@@ -255,9 +270,14 @@ def train(config):
     workdir = FLAGS.workdir
     if workdir is None:
         workdir = tempfile.mkdtemp(prefix='uil-')
-    logging.info(f'workdir: {workdir}')
+
+    workdir = pathlib.Path(workdir)
+    workdir.mkdir()
+
+    shutil.copyfile(config.config_file, workdir / 'config.py')
+    logging.info(f'workdir: {str(workdir)}')
     if config.wandb:
-        wandb.init(project='UIL', config=config)
+        wandb.init(project='UIL', entity='uil', config=config)
 
     # setup model and optimizer
     rng, init_rng = jax.random.split(rng)
@@ -301,7 +321,7 @@ def train(config):
         mask=create_weight_decay_param_mask,
     )
     state = train_state.TrainState.create(apply_fn=classifier.apply, params=params, tx=tx)
-    ckpt_dir = pathlib.Path(workdir) / 'checkpoints'
+    ckpt_dir = workdir / 'checkpoints'
 
     # print model
     rng, tabulate_rng = jax.random.split(rng)
@@ -335,9 +355,11 @@ def train(config):
             train_loader,
             test_loader,
             rng)
-        checkpoints.save_checkpoint(
-            ckpt_dir, state, epoch, keep=float('inf')
-        )
+
+        if (epoch + 1) % config.ckpt_interval_epochs == 0 or epoch == config.epochs - 1:
+            checkpoints.save_checkpoint(
+                ckpt_dir, state, epoch, keep=float('inf')
+            )
 
     return state
 

@@ -4,6 +4,9 @@ import ml_collections
 def get_config():
     config = ml_collections.ConfigDict()
 
+    # source path
+    config.config_file = __file__
+
     # random seeds
     config.seed = 42
 
