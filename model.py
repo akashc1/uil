@@ -332,6 +332,7 @@ class UILClassifier(nn.Module):
 
     def __call__(self, x, rng):
         x_encoded, _, _ = self.encoder.encode_image(x, 0.0, rng)
+        # TODO: use CLS_token instead of flattening the whole thing
         x_encoded = x_encoded.reshape((x_encoded.shape[0], -1))  # flatten
         logits = self.class_head(self.mlp(x_encoded))
         return logits
