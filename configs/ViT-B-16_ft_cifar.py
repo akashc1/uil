@@ -4,18 +4,21 @@ import ml_collections
 def get_config():
     config = ml_collections.ConfigDict()
 
+    # source path
+    config.config_file = __file__
+
     # random seeds
     config.seed = 42
 
     # optimizer
     config.learning_rate = 3e-4
-    config.lr_warmup_steps = 100
+    config.lr_warmup_steps = 10
     config.lr_cosine_decay = True
     config.beta1 = 0.9
     config.beta2 = 0.95
     config.weight_decay = 0.05
-    config.batch_size = 128
-    config.epochs = 1
+    config.batch_size = 2048
+    config.epochs = 50
 
     # Base model
     config.width = 768
@@ -47,11 +50,11 @@ def get_config():
     config.num_classes = 10
 
     # dataloader
-    config.num_workers = 20
+    config.num_workers = 48
 
     # logging
     config.wandb = True
-    config.logging_interval = 10
+    config.logging_interval = 5
     config.eval_interval = 500
     config.ckpt_interval = 1000
 
