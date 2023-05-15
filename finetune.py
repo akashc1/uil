@@ -287,6 +287,7 @@ def train(config):
         width=config.width,
         layers=config.layers,
         heads=config.heads,
+        noise_std=config.noise_std,
         mask_ratio=config.mask_ratio,
         decoder_layers=config.decoder_layers,
         decoder_width=config.decoder_width,
