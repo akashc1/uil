@@ -126,19 +126,26 @@ def mae_loss(imgs, pred, mask, p):
     return loss
 
 
-# @functools.partial(jax.jit, static_argnums=(2,))
+def denoising_loss(pred_noise, noise, p):
+    noise = patchify(noise, p)
+    loss = (pred_noise - noise) ** 2
+    return jnp.mean(loss)
+
+
 def train_step(state, images, config, rng):
     rng = jax.random.fold_in(rng, state.step)
     dropout_rng, mask_rng = jax.random.split(rng)
 
     def loss_fn(params):
-        pred, mask = UIL(**config, deterministic=False).apply(
+        pred, mask, pred_noise, noise = UIL(**config, deterministic=False).apply(
             {'params': params},
             images, mask_rng,
             rngs={'dropout': dropout_rng},
         )
 
-        loss = mae_loss(images, pred, mask, config['patch_size'])
+        l1 = mae_loss(images, pred, mask, config['patch_size'])
+        l2 = denoising_loss(pred_noise, noise, config['patch_size'])
+        loss = l1 + l2
         return loss, pred
 
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
@@ -248,6 +255,7 @@ def train(config):
         width=config.width,
         layers=config.layers,
         heads=config.heads,
+        noise_std=config.noise_std,
         mask_ratio=config.mask_ratio,
         decoder_layers=config.decoder_layers,
         decoder_width=config.decoder_width,

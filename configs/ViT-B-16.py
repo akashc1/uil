@@ -14,8 +14,8 @@ def get_config():
     config.beta1 = 0.9
     config.beta2 = 0.95
     config.weight_decay = 0.05
-    config.batch_size = 2048
-    config.epochs = 10
+    config.batch_size = 1024
+    config.epochs = 1
 
     # model
     config.width = 768
@@ -24,6 +24,7 @@ def get_config():
     config.image_size = 224
     config.patch_size = 16
 
+    config.noise_std = 0.8
     config.mask_ratio = 0.75
     config.decoder_layers = 8
     config.decoder_width = 512

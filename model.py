@@ -105,6 +105,7 @@ class UIL(nn.Module):
     layers: int
     heads: int
 
+    noise_std: float
     mask_ratio: float
     decoder_layers: int
     decoder_width: int
@@ -175,6 +176,8 @@ class UIL(nn.Module):
         self.dec_ln_post = nn.LayerNorm(param_dtype=jnp.bfloat16)
         self.decoder_pred = nn.Dense(self.patch_size**2 * 3, use_bias=True, param_dtype=jnp.bfloat16) # decoder to patch
 
+        self.noise_pred = nn.Dense(self.patch_size**2 * 3, use_bias=True, param_dtype=jnp.bfloat16)
+
     def random_masking(self, x, mask_ratio, rng):
         N, L, D = x.shape  # batch, length, dim
         len_keep = int(L * (1 - mask_ratio))
@@ -197,7 +200,7 @@ class UIL(nn.Module):
         mask = batched_gather(mask, ids_restore)
         return x_masked, mask, ids_restore
 
-    def encode_image(self, x, mask_ratio, rng):
+    def encode_mae(self, x, mask_ratio, rng):
         x = self.conv1(x)  # [*, grid, grid, width]
         x = x.reshape((x.shape[0], -1, x.shape[-1]))  # [*, grid ** 2, width]
 
@@ -217,7 +220,7 @@ class UIL(nn.Module):
 
         return x, mask, ids_restore
 
-    def decode_image(self, x, ids_restore):
+    def decode_mae(self, x, ids_restore):
         x = self.decoder_embed(x)
 
         mask_tokens = jnp.tile(
@@ -237,7 +240,45 @@ class UIL(nn.Module):
         x = x[:, 1:, :]
         return x
 
+    def perturb(self, x, noise_std, rng):
+        noise = jax.random.normal(rng, shape=x.shape, dtype=x.dtype)
+        x = x + noise_std * noise
+
+        x = self.conv1(x)  # [*, grid, grid, width]
+        x = x.reshape((x.shape[0], -1, x.shape[-1]))  # [*, grid ** 2, width]
+
+        x = x + self.positional_embedding[1:, :].astype(x.dtype)
+        cls_token = self.class_embedding.astype(x.dtype) + \
+                    self.positional_embedding[:1, :].astype(x.dtype)
+        cls_token = jnp.broadcast_to(cls_token, (x.shape[0], 1, self.width))
+        x = jnp.concatenate([cls_token, x], axis=1)
+
+        x = self.ln_pre(x)
+        x = self.transformer(x)
+        x = self.ln_post(x)
+
+        return x, noise
+
+    def denoise(self, x):
+        x = self.decoder_embed(x)
+
+        x = x + self.decoder_positional_embedding.astype(x.dtype)
+
+        x = self.dec_ln_pre(x)
+        x = self.decoder(x)
+        x = self.dec_ln_post(x)
+        x = self.noise_pred(x)
+        x = x[:, 1:, :]
+        return x
+
     def __call__(self, x, rng):
-        latent, mask, ids_restore = self.encode_image(x, self.mask_ratio, rng)
-        pred = self.decode_image(latent, ids_restore)
-        return pred, mask
+        rng_denoise, rng_mae = jax.random.split(rng)
+
+        # Denoising
+        x_perturb, true_noise = self.perturb(x, self.noise_std, rng_denoise)
+        pred_noise = self.denoise(x_perturb)
+
+        # MAE
+        latent, mask, ids_restore = self.encode_mae(x, self.mask_ratio, rng_mae)
+        pred_mae = self.decode_mae(latent, ids_restore)
+        return pred_mae, mask, pred_noise, true_noise
