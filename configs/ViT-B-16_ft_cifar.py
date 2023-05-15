@@ -27,6 +27,7 @@ def get_config():
     config.image_size = 224
     config.patch_size = 16
 
+    config.noise_std = 0.8
     config.mask_ratio = 0.75
     config.decoder_layers = 8
     config.decoder_width = 512
@@ -55,7 +56,7 @@ def get_config():
     # logging
     config.wandb = True
     config.logging_interval = 5
-    config.eval_interval = 500
-    config.ckpt_interval = 1000
+    config.eval_interval = 10
+    config.ckpt_interval_epochs = 5
 
     return config
