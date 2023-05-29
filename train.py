@@ -284,6 +284,7 @@ def train(config):
     preprocess_train = image_transform(config.image_size, is_train=True)
     train_loader = get_hf_image_dataset(
         data=config.train_data,
+        split='train',
         preprocess_fn=preprocess_train,
         batch_size=config.batch_size,
         num_workers=config.num_workers,

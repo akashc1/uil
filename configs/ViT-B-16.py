@@ -39,6 +39,7 @@ def get_config():
     # config.train_data = '/mnt/datasets/imagenet/imagenet-train-{000000..000000}.tar'
     config.train_data = 'imagenet-1k'
     config.train_num_samples = 1281167
+    config.image_key = 'image'
 
     # dataloader
     config.num_workers = 48
