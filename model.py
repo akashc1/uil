@@ -106,7 +106,7 @@ class Transformer(nn.Module):
     @nn.compact
     def __call__(self, x, attn_mask=None):
         for i in range(self.num_layers):
-            x = Block({**self.block_params, 'name': f'block{i}'})(x, attn_mask)
+            x = Block(**{**self.block_params, 'name': f'block{i}'})(x, attn_mask)
 
         return x
 
@@ -136,7 +136,12 @@ class UIL(nn.Module):
             'attn_dropout_rate': self.attn_dropout_rate,
             'dropout_rate': self.dropout_rate,
             'deterministic': self.deterministic,
-        )
+        }
+        decoder_block_params = {
+            **block_params,
+            'd_model': self.decoder_width,
+            'heads': self.decoder_heads,
+        }
         # Encoder
         self.conv1 = nn.Conv(
             self.width,
@@ -173,22 +178,25 @@ class UIL(nn.Module):
             lambda _, shape: get_2d_sincos_pos_embed(shape[1], shape[0], cls_token=True),
             (grid_size, self.decoder_width),
         )
-        self.decoder = nn.Sequential([
-            Block(
-                d_model=self.decoder_width,
-                heads=self.decoder_heads,
-                attn_dropout_rate=self.attn_dropout_rate,
-                dropout_rate=self.dropout_rate,
-                deterministic=self.deterministic,
-            )
-            for _ in range(self.decoder_layers)
-        ])
+        self.decoder = Transformer(self.decoder_layers, decoder_block_params)
+        self.dec_ln_pre = nn.LayerNorm(param_dtype=jnp.bfloat16)
+        self.dec_ln_post = nn.LayerNorm(param_dtype=jnp.bfloat16)
+        self.decoder_pred = nn.Dense(self.patch_size**2 * 3, use_bias=True, param_dtype=jnp.bfloat16)
+
+        # Denoising decoder
+        self.denoise_decoder_embed = nn.Dense(self.decoder_width, use_bias=True, param_dtype=jnp.bfloat16)
+        self.denoise_decoder_positional_embedding = self.param(
+            'denoise_dec_pos_embed',
+            lambda _, shape: get_2d_sincos_pos_embed(shape[1], shape[0], cls_token=True),
+            (grid_size, self.decoder_width),
+        )
+        self.denoise_decoder = Transformer(self.decoder_layers, decoder_block_params)
         self.denoise_dec_ln_pre = nn.LayerNorm(param_dtype=jnp.bfloat16)
         self.denoise_dec_ln_post = nn.LayerNorm(param_dtype=jnp.bfloat16)
         self.noise_pred = nn.Dense(self.patch_size**2 * 3, use_bias=True, param_dtype=jnp.bfloat16)
 
         # Causal decoder
-        self.causal_decoder = Transformer(self.layers, block_params)
+        self.causal_decoder = Transformer(self.decoder_layers, decoder_block_params)
 
     def fwd_transformer(self, x, attn_mask=None):
         """Assumes that positional embeddings were previously added"""
@@ -229,7 +237,6 @@ class UIL(nn.Module):
 
     def encode_mae(self, x, mask_ratio, rng):
         x = self.conv1(x)  # [*, grid, grid, width]
-        breakpoint()
         x = x.reshape((x.shape[0], -1, x.shape[-1]))  # [*, grid ** 2, width]
 
         x = x + self.positional_embedding[1:, :].astype(x.dtype)
@@ -264,7 +271,7 @@ class UIL(nn.Module):
         x = self.conv1(x)
         x = x.reshape((x.shape[0], -1, x.shape[-1]))
         T = x.shape[1]
-        x = x + self.positional_embedding[1:, :].astye(x.dtype)
+        x = x + self.positional_embedding[1:, :].astype(x.dtype)
 
         len_keep = int(x.shape[1] * (1 - mask_ratio))
         x = x[:, :len_keep]
@@ -276,17 +283,17 @@ class UIL(nn.Module):
         x = self.decoder_embed(x)
         mask_tokens = jnp.tile(
             self.mask_token,
-            (x.shape[0], T + 1 - x.shape[1], 1)
+            (x.shape[0], T - x.shape[1] + 1, 1)
         )
-        x = jnp.concatenate([x[:, 1:, :], mask_tokens], axis=1)
+        x = jnp.concatenate([x, mask_tokens], axis=1)
 
         x = x + self.decoder_positional_embedding.astype(x.dtype)
         x = self.dec_ln_pre(x)
-        attn_mask = nn.make_causal_mask(jnp.ones((x.shape[0], T), dtype=x.dtype))
+        attn_mask = nn.make_causal_mask(jnp.ones((x.shape[0], T + 1), dtype=x.dtype))
         x = self.causal_decoder(x, attn_mask)
         x = self.dec_ln_post(x)
         x = self.decoder_pred(x)
-        return x
+        return x[:, 1:, :]
 
     def perturb(self, x, noise_std, rng):
         noise = noise_std * jax.random.normal(rng, shape=x.shape, dtype=x.dtype)
