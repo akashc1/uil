@@ -18,7 +18,6 @@ _SAMPLE_SHUFFLE_SIZE = 5000
 _SAMPLE_SHUFFLE_INITIAL = 1000
 OPENAI_DATASET_MEAN = (0.48145466, 0.4578275, 0.40821073)
 OPENAI_DATASET_STD = (0.26862954, 0.26130258, 0.27577711)
-DATA_DIR = '/mnt/disks/imagenet1/imagenet'
 
 
 class HFImageDataset(Dataset):
@@ -28,7 +27,7 @@ class HFImageDataset(Dataset):
         except ImportError:
             raise ImportError('Please install datasets with `pip install datasets`.')
 
-        self.df = load_dataset(name, split=split, cache_dir=DATA_DIR)
+        self.df = load_dataset(name, split=split)
         self.size = len(self.df)
         self.image_key = image_key
         self.label_key = label_key
