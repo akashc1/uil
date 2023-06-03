@@ -139,7 +139,7 @@ def train_step(state, images, config, rng):
 
         l1 = mae_loss(images, pred_mae, mask, config['patch_size'])
         l2 = denoising_loss(pred_noise, noise, config['patch_size'])
-        l3 = mae_loss(images, pred_causal, jnp.ones_like(pred_causal), config['patch_size'])
+        l3 = mae_loss(images, pred_causal, jnp.ones_like(pred_causal[:, :, 0]), config['patch_size'])
         loss = l1 + l2 + l3
         return loss, pred_mae
 

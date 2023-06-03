@@ -38,7 +38,7 @@ def get_config():
     config.image_key = 'image'
 
     # dataloader
-    config.num_workers = 48
+    config.num_workers = 8
 
     # logging
     config.wandb = True

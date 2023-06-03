@@ -195,9 +195,6 @@ class UIL(nn.Module):
         self.denoise_dec_ln_post = nn.LayerNorm(param_dtype=jnp.bfloat16)
         self.noise_pred = nn.Dense(self.patch_size**2 * 3, use_bias=True, param_dtype=jnp.bfloat16)
 
-        # Causal decoder
-        self.causal_decoder = Transformer(self.decoder_layers, decoder_block_params)
-
     def fwd_transformer(self, x, attn_mask=None):
         """Assumes that positional embeddings were previously added"""
 
@@ -290,7 +287,7 @@ class UIL(nn.Module):
         x = x + self.decoder_positional_embedding.astype(x.dtype)
         x = self.dec_ln_pre(x)
         attn_mask = nn.make_causal_mask(jnp.ones((x.shape[0], T + 1), dtype=x.dtype))
-        x = self.causal_decoder(x, attn_mask)
+        x = self.decoder(x, attn_mask)
         x = self.dec_ln_post(x)
         x = self.decoder_pred(x)
         return x[:, 1:, :]
