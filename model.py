@@ -118,6 +118,10 @@ class UIL(nn.Module):
     layers: int
     heads: int
 
+    do_causal: bool
+    do_mae: bool
+    do_denoise: bool
+
     noise_std: float
     mask_ratio: float
     decoder_layers: int
@@ -318,18 +322,22 @@ class UIL(nn.Module):
 
     def __call__(self, x, rng):
         rng_denoise, rng_mae = jax.random.split(rng)
+        pred_mae, pred_causal, mask, pred_noise, true_noise = (None,) * 5
 
         # Denoising
-        x_perturb, true_noise = self.perturb(x, self.noise_std, rng_denoise)
-        pred_noise = self.denoise(x_perturb)
+        if self.do_denoise:
+            x_perturb, true_noise = self.perturb(x, self.noise_std, rng_denoise)
+            pred_noise = self.denoise(x_perturb)
 
         # MAE
-        latent, mask, ids_restore = self.encode_mae(x, self.mask_ratio, rng_mae)
-        pred_mae = self.decode_mae(latent, ids_restore)
+        if self.do_mae:
+            latent, mask, ids_restore = self.encode_mae(x, self.mask_ratio, rng_mae)
+            pred_mae = self.decode_mae(latent, ids_restore)
 
         # Causal
-        latent_causal, T = self.encode_causal(x, self.mask_ratio)
-        pred_causal = self.decode_causal(latent_causal, T)
+        if self.do_causal:
+            latent_causal, T = self.encode_causal(x, self.mask_ratio)
+            pred_causal = self.decode_causal(latent_causal, T)
         return pred_mae, pred_causal, mask, pred_noise, true_noise
 
 

@@ -136,11 +136,13 @@ def train_step(state, images, config, rng):
             images, mask_rng,
             rngs={'dropout': dropout_rng},
         )
-
-        l1 = mae_loss(images, pred_mae, mask, config['patch_size'])
-        l2 = denoising_loss(pred_noise, noise, config['patch_size'])
-        l3 = mae_loss(images, pred_causal, jnp.ones_like(pred_causal[:, :, 0]), config['patch_size'])
-        loss = l1 + l2 + l3
+        loss = 0
+        loss += mae_loss(images, pred_mae, mask, config['patch_size']) if pred_mae is not None else 0
+        loss += denoising_loss(pred_noise, noise, config['patch_size']) if pred_noise is not None else 0
+        loss += (
+            mae_loss(images, pred_causal, jnp.ones_like(pred_causal[:, :, 0]), config['patch_size'])
+            if pred_causal is not None else 0
+        )
         return loss, pred_mae
 
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
@@ -257,6 +259,9 @@ def train(config):
         decoder_heads=config.decoder_heads,
         dropout_rate=config.dropout_rate,
         attn_dropout_rate=config.attn_dropout_rate,
+        do_denoise=config.denoise,
+        do_mae=config.mae,
+        do_causal=config.causal,
     )
     model = UIL(**model_config, deterministic=True)
     fake_img = jnp.ones([2, config.image_size, config.image_size, 3], dtype=jnp.bfloat16)
