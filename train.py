@@ -15,10 +15,10 @@ import jax.numpy as jnp
 from ml_collections import config_flags
 import numpy as np
 import optax
-import wandb
 
 from data import get_hf_image_dataset, image_transform
 from model import UIL
+import wandb
 
 Fore = colorama.Fore
 Style = colorama.Style
@@ -131,16 +131,17 @@ def train_step(state, images, config, rng):
     dropout_rng, mask_rng = jax.random.split(rng)
 
     def loss_fn(params):
-        pred, mask, pred_noise, noise = UIL(**config, deterministic=False).apply(
+        pred_mae, pred_causal, mask, pred_noise, noise = UIL(**config, deterministic=False).apply(
             {'params': params},
             images, mask_rng,
             rngs={'dropout': dropout_rng},
         )
 
-        l1 = mae_loss(images, pred, mask, config['patch_size'])
+        l1 = mae_loss(images, pred_mae, mask, config['patch_size'])
         l2 = denoising_loss(pred_noise, noise, config['patch_size'])
-        loss = l1 + l2
-        return loss, pred
+        l3 = mae_loss(images, pred_causal, jnp.ones_like(pred_causal), config['patch_size'])
+        loss = l1 + l2 + l3
+        return loss, pred_mae
 
     grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
     (loss, pred), grads = grad_fn(state.params)

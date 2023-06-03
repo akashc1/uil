@@ -355,7 +355,8 @@ def train(config):
             classifier_config,
             train_loader,
             test_loader,
-            rng)
+            rng,
+        )
 
         if (epoch + 1) % config.ckpt_interval_epochs == 0 or epoch == config.epochs - 1:
             checkpoints.save_checkpoint(
