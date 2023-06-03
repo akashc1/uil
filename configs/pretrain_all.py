@@ -7,6 +7,11 @@ def get_config():
     # random seeds
     config.seed = 42
 
+    # pretraining objectives
+    config.mae = True
+    config.denoise = True
+    config.causal = True
+
     # optimizer
     config.learning_rate = 3e-4
     config.lr_warmup_steps = 500
@@ -15,7 +20,7 @@ def get_config():
     config.beta2 = 0.95
     config.weight_decay = 0.05
     config.batch_size = 1024
-    config.epochs = 1
+    config.epochs = 5
 
     # model
     config.width = 768
@@ -44,6 +49,6 @@ def get_config():
     config.wandb = True
     config.logging_interval = 10
     config.eval_interval = 500
-    config.ckpt_interval_epochs = 5
+    config.ckpt_interval_epochs = 1
 
     return config
