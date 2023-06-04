@@ -1,4 +1,5 @@
 import math
+import yaml
 import pathlib
 import shutil
 import tempfile
@@ -28,11 +29,13 @@ Style = colorama.Style
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string('workdir', None, 'Directory to store model data.')
+flags.DEFINE_string('ckpt_init_path', None, 'Path to pretrained weights', short_name='i')
 config_flags.DEFINE_config_file(
     'config',
-    None,
+    'configs/finetune.py',
     'File path to the training hyperparameter configuration.',
     lock_config=True,
+    short_name='c',
 )
 
 
@@ -118,12 +121,12 @@ def ce_logits_loss(labels, logits):
     return optax.softmax_cross_entropy_with_integer_labels(logits, labels).mean()
 
 
-def train_step(state, images, labels, config, rng):
+def train_step(state, images, labels, rng):
     rng = jax.random.fold_in(rng, state.step)
     dropout_rng, mask_rng = jax.random.split(rng)
 
     def loss_fn(params):
-        logits = UILClassifier(**config).apply(
+        logits = state.apply_fn(
             {'params': params},
             images, mask_rng,
             rngs={'dropout': dropout_rng},
@@ -138,7 +141,7 @@ def train_step(state, images, labels, config, rng):
     return state, (loss, pred), rng
 
 
-def train_one_epoch(config, epoch, state, model_config, train_loader, test_loader, rng):
+def train_one_epoch(config, epoch, state, train_loader, test_loader, rng):
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
@@ -153,7 +156,7 @@ def train_one_epoch(config, epoch, state, model_config, train_loader, test_loade
 
     test_loader_iter = iter(test_loader)
 
-    p_train_step = jax.pmap(train_step, axis_name='batch', donate_argnums=(0,), static_broadcasted_argnums=(3,))
+    p_train_step = jax.pmap(train_step, axis_name='batch', donate_argnums=(0,))
 
     # replicate params and rng
     state = flax.jax_utils.replicate(state)
@@ -181,7 +184,7 @@ def train_one_epoch(config, epoch, state, model_config, train_loader, test_loade
 
         percent_complete = num_samples / samples_per_epoch * 100
 
-        state, (loss, _), rng = p_train_step(state, images, labels, model_config, rng)
+        state, (loss, _), rng = p_train_step(state, images, labels, rng)
         loss = jax.tree_map(lambda x: x[0], loss)
 
         batch_time_m.update(time.time() - end)
@@ -222,7 +225,7 @@ def train_one_epoch(config, epoch, state, model_config, train_loader, test_loade
             single_rng = jax.random.fold_in(rng[0], state.step[0])
             dropout_rng, mask_rng = jax.random.split(single_rng)
             images, labels = images[0], labels[0]  # Just take the first device's batch
-            logits = UILClassifier(**model_config).apply(
+            logits = dedup_state.apply_fn(
                 {'params': dedup_state.params},
                 images,
                 mask_rng,
@@ -234,7 +237,7 @@ def train_one_epoch(config, epoch, state, model_config, train_loader, test_loade
             images = test_batch['image'].permute(0, 2, 3, 1).numpy()
             images = np.array(images, dtype=jnp.bfloat16)
             labels = jnp.array(test_batch['label'].numpy(), dtype=jnp.uint8)
-            logits = UILClassifier(**model_config).apply(
+            logits = dedup_state.apply_fn(
                 {'params': dedup_state.params},
                 images,
                 mask_rng,
@@ -245,7 +248,8 @@ def train_one_epoch(config, epoch, state, model_config, train_loader, test_loade
             del logits, test_batch
 
             logging.info(
-                f"Train Epoch: {epoch} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
+                f"Train Epoch: {epoch} [{num_samples:>{sample_digits}}/{samples_per_epoch} "
+                f"({percent_complete:.0f}%)] "
                 f"step {step} train accuracy: {tr_acc:.4f} test accuracy: {ts_acc:.4f}"
             )
 
@@ -272,10 +276,12 @@ def train(config):
         workdir = tempfile.mkdtemp(prefix='uil-')
 
     workdir = pathlib.Path(workdir)
-    workdir.mkdir()
-
-    shutil.copyfile(config.config_file, workdir / 'config.py')
     logging.info(f'workdir: {str(workdir)}')
+
+    # save training config for sanity
+    with open(workdir / 'config.yaml', 'w') as fh:
+        yaml.safe_dump(dict(config), fh)
+
     if config.wandb:
         wandb.init(project='UIL', entity='uil', config=config)
 
@@ -294,6 +300,9 @@ def train(config):
         decoder_heads=config.decoder_heads,
         dropout_rate=config.dropout_rate,
         attn_dropout_rate=config.attn_dropout_rate,
+        do_mae=False,
+        do_denoise=False,
+        do_causal=False,
     )
     mae_model = UIL(**uil_config, deterministic=True)
 
@@ -304,14 +313,17 @@ def train(config):
         dropout_rate=config.classifier_dropout_rate,
         deterministic=True,
         n_classes=config.num_classes,
+        global_pool=config.global_pool,
     )
     classifier = UILClassifier(**classifier_config)
 
     fake_img = jnp.ones([2, config.image_size, config.image_size, 3], dtype=jnp.bfloat16)
     params = classifier.init(init_rng, fake_img, init_rng)['params']
-    if config.ckpt_init_path is not None:
-        params = classifier.insert_pretrained_params(config.ckpt_init_path, params)
-        logging.info(f"Loaded pretrained weights from {config.ckpt_init_path}")
+    if FLAGS.ckpt_init_path is not None:
+        params = classifier.insert_pretrained_params(FLAGS.ckpt_init_path, params)
+        logging.info(f"Loaded pretrained weights from {FLAGS.ckpt_init_path}")
+    else:
+        logging.info("No pretrained weights provided -- training from scratch!!")
 
     learning_rate_fn = create_learning_rate_fn(config)
     tx = optax.adamw(
@@ -343,7 +355,7 @@ def train(config):
         split='test',
         preprocess_fn=image_transform(config.image_size, is_train=False),
         batch_size=config.batch_size // jax.device_count(),  # Just using one device for eval
-        num_workers=config.num_workers // jax.device_count(),
+        num_workers=1,
         image_key=config.image_key,
     )
 
@@ -352,7 +364,6 @@ def train(config):
             config,
             epoch,
             state,
-            classifier_config,
             train_loader,
             test_loader,
             rng,

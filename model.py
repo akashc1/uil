@@ -1,4 +1,5 @@
 from flax.core import frozen_dict
+from pathlib import Path
 import flax.linen as nn
 from flax.training import checkpoints
 import jax
@@ -351,6 +352,7 @@ class UILClassifier(nn.Module):
     n_classes: int
 
     dropout_rate: float = 0.0
+    global_pool: bool = False
 
     def setup(self):
         mlp_layers = sum(
@@ -373,6 +375,9 @@ class UILClassifier(nn.Module):
     @staticmethod
     def insert_pretrained_params(ckpt_path, params: frozen_dict.FrozenDict):
         # Parallel loading seems broken
+        ckpt_path = Path(ckpt_path)
+        if ckpt_path.name != 'checkpoints':
+            ckpt_path /= 'checkpoints'
         pretrained_params = checkpoints.restore_checkpoint(ckpt_path, None, parallel=False)['params']
         params = params.unfreeze()
         params['encoder'] = pretrained_params
@@ -380,7 +385,6 @@ class UILClassifier(nn.Module):
 
     def __call__(self, x, rng):
         x_encoded, _, _ = self.encoder.encode_mae(x, 0.0, rng)
-        # TODO: use CLS_token instead of flattening the whole thing
-        x_encoded = x_encoded.reshape((x_encoded.shape[0], -1))  # flatten
+        x_encoded = x_encoded[:, 1:].mean(1) if self.global_pool else x_encoded[:, 0]
         logits = self.class_head(self.mlp(x_encoded))
         return logits
