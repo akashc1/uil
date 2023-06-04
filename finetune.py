@@ -355,7 +355,7 @@ def train(config):
         split='test',
         preprocess_fn=image_transform(config.image_size, is_train=False),
         batch_size=config.batch_size // jax.device_count(),  # Just using one device for eval
-        num_workers=1,
+        num_workers=config.num_workers // jax.device_count(),
         image_key=config.image_key,
     )
 

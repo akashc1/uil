@@ -7,8 +7,8 @@ def get_config():
 
     # finetuning params
     config.lr_warmup_steps = 10
-    config.batch_size = 2048
-    config.epochs = 50
+    config.batch_size = 256
+    config.epochs = 30
 
     # classifier params
     config.classifier_hidden_dim = 768
@@ -21,7 +21,7 @@ def get_config():
     config.image_key = 'img'
     config.num_classes = 10
 
-    config.num_workers = 8
+    config.num_workers = 32
 
     # log/eval intervals
     config.log_interval = 5
