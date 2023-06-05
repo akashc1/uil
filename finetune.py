@@ -304,6 +304,7 @@ def train(config):
         workdir = tempfile.mkdtemp(prefix='uil-')
 
     workdir = pathlib.Path(workdir)
+    workdir.mkdir(exist_ok=FLAGS.workdir is None)
     logging.info(f'workdir: {str(workdir)}')
 
     # save training config for sanity
