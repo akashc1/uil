@@ -1,9 +1,13 @@
 import importlib
+
 base_config = importlib.import_module('configs.ViT-B-16')
 
 
 def get_config():
     config = base_config.get_config()
+
+    # frozen params
+    config.freeze_encoder = True
 
     # finetuning params
     config.lr_warmup_steps = 10
