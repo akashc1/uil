@@ -1,5 +1,4 @@
 import math
-import yaml
 import pathlib
 import shutil
 import tempfile
@@ -17,9 +16,10 @@ import jax.numpy as jnp
 from ml_collections import config_flags
 import numpy as np
 import optax
+import yaml
 
 from data import get_hf_image_dataset, image_transform
-from evaluate import batch_accuracy
+from evaluate import batch_accuracy, eval_dataset
 from model import UIL, UILClassifier
 import wandb
 
@@ -283,7 +283,7 @@ def train(config):
         yaml.safe_dump(dict(config), fh)
 
     if config.wandb:
-        wandb.init(project='UIL', entity='uil', config=config)
+        wandb.init(project='UIL', entity='uil', config=config, name=f'finetune_{workdir.name}')
 
     # setup model and optimizer
     rng, init_rng = jax.random.split(rng)
@@ -382,7 +382,21 @@ def main(argv):
 
     config = FLAGS.config
     np.random.seed(config.seed)
-    _ = train(config)
+    final_state = train(config)
+
+    # run evaluation on the full test set
+    test_loader = get_hf_image_dataset(
+        data=config.train_data,
+        split='test',
+        preprocess_fn=image_transform(config.image_size, is_train=False),
+        batch_size=config.batch_size // jax.device_count(),  # Just using one device for eval
+        num_workers=config.num_workers // jax.device_count(),
+        image_key=config.image_key,
+    )
+    test_accuracy = eval_dataset(test_loader, final_state)
+    if config.wandb:
+        wandb.log({'final_test_accuracy': test_accuracy})
+        logging.info(Fore.MAGENTA + Style.BRIGHT + "Final test accuracy: " + str(test_accuracy))
 
 
 if __name__ == '__main__':
