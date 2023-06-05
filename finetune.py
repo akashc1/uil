@@ -1,21 +1,23 @@
 import math
 import pathlib
-import shutil
 import tempfile
 import time
 
 from absl import app, flags, logging
 import colorama
 import flax
+from flax import traverse_util
 from flax.core import frozen_dict
+from flax.core.frozen_dict import freeze
 import flax.linen as nn
 from flax.training import checkpoints, train_state
 import jax
 from jax import lax
 import jax.numpy as jnp
-from ml_collections import config_flags
+from ml_collections import ConfigDict, config_flags
 import numpy as np
 import optax
+from torch.utils.data import DataLoader
 import yaml
 
 from data import get_hf_image_dataset, image_transform
@@ -117,6 +119,28 @@ def create_weight_decay_param_mask(p):
     return p
 
 
+def build_optimizer_tx(config, params):
+    learning_rate_fn = create_learning_rate_fn(config)
+    adam = optax.adamw(
+        learning_rate_fn,
+        b1=config.beta1,
+        b2=config.beta2,
+        weight_decay=config.weight_decay,
+        mask=create_weight_decay_param_mask,
+    )
+    if not config.freeze_encoder:
+        return adam
+
+    optims = {'adam': adam, 'zero': optax.set_to_zero()}
+    mask = freeze(
+        traverse_util.path_aware_map(
+            lambda path, _: 'zero' if 'encoder' in path else 'adam',
+            params,
+        )
+    )
+    return optax.multi_transform(optims, mask)
+
+
 def ce_logits_loss(labels, logits):
     return optax.softmax_cross_entropy_with_integer_labels(logits, labels).mean()
 
@@ -141,12 +165,18 @@ def train_step(state, images, labels, rng):
     return state, (loss, pred), rng
 
 
-def train_one_epoch(config, epoch, state, train_loader, test_loader, rng):
+def train_one_epoch(
+    config: ConfigDict,
+    epoch: int,
+    state: train_state.TrainState,
+    train_loader: DataLoader,
+    test_loader: DataLoader,
+    rng: jnp.ndarray,
+):
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
 
-    learning_rate_fn = create_learning_rate_fn(config)
     world_size = jax.device_count()
     samples_per_epoch = train_loader.num_samples
     num_batches_per_epoch = train_loader.num_batches
@@ -156,6 +186,7 @@ def train_one_epoch(config, epoch, state, train_loader, test_loader, rng):
 
     test_loader_iter = iter(test_loader)
 
+    learning_rate_fn = create_learning_rate_fn(config)
     p_train_step = jax.pmap(train_step, axis_name='batch', donate_argnums=(0,))
 
     # replicate params and rng
@@ -184,7 +215,7 @@ def train_one_epoch(config, epoch, state, train_loader, test_loader, rng):
 
         percent_complete = num_samples / samples_per_epoch * 100
 
-        state, (loss, _), rng = p_train_step(state, images, labels, rng)
+        state, (loss, logits), rng = p_train_step(state, images, labels, rng)
         loss = jax.tree_map(lambda x: x[0], loss)
 
         batch_time_m.update(time.time() - end)
@@ -193,7 +224,7 @@ def train_one_epoch(config, epoch, state, train_loader, test_loader, rng):
         if i % config.logging_interval == 0:
             samples_per_second = config.batch_size * world_size / batch_time_m.val
             samples_per_second_per_gpu = config.batch_size / batch_time_m.val
-            lr = jax.tree_map(lambda x: x[0], learning_rate_fn(state.step))
+            lr = learning_rate_fn(flax.jax_utils.unreplicate(state.step))
 
             logging.info(
                 f"Train Epoch: {epoch} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
@@ -221,22 +252,19 @@ def train_one_epoch(config, epoch, state, train_loader, test_loader, rng):
             data_time_m.reset()
 
         if i % config.eval_interval == 0:
+            # training accuracy using the logits we just computed
+            tr_acc = batch_accuracy(logits, labels)
+
+            # sample a test batch to forward
             dedup_state = flax.jax_utils.unreplicate(state)
             single_rng = jax.random.fold_in(rng[0], state.step[0])
             dropout_rng, mask_rng = jax.random.split(single_rng)
-            images, labels = images[0], labels[0]  # Just take the first device's batch
-            logits = dedup_state.apply_fn(
-                {'params': dedup_state.params},
-                images,
-                mask_rng,
-                rngs={'dropout': dropout_rng},
-            )
-            tr_acc = batch_accuracy(logits, labels)
 
             test_batch = next(test_loader_iter)
             images = test_batch['image'].permute(0, 2, 3, 1).numpy()
             images = np.array(images, dtype=jnp.bfloat16)
             labels = jnp.array(test_batch['label'].numpy(), dtype=jnp.uint8)
+
             logits = dedup_state.apply_fn(
                 {'params': dedup_state.params},
                 images,
@@ -325,14 +353,7 @@ def train(config):
     else:
         logging.info("No pretrained weights provided -- training from scratch!!")
 
-    learning_rate_fn = create_learning_rate_fn(config)
-    tx = optax.adamw(
-        learning_rate_fn,
-        b1=config.beta1,
-        b2=config.beta2,
-        weight_decay=config.weight_decay,
-        mask=create_weight_decay_param_mask,
-    )
+    tx = build_optimizer_tx(config, params)
     state = train_state.TrainState.create(apply_fn=classifier.apply, params=params, tx=tx)
     ckpt_dir = workdir / 'checkpoints'
 
@@ -400,6 +421,5 @@ def main(argv):
 
 
 if __name__ == '__main__':
-    flags.mark_flags_as_required(['config'])
     jax.config.config_with_absl()
     app.run(main)
