@@ -171,7 +171,7 @@ def train_one_epoch(
     state: train_state.TrainState,
     train_loader: DataLoader,
     test_loader: DataLoader,
-    rng, jnp.ndarray,
+    rng: jnp.ndarray,
 ):
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
