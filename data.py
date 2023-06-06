@@ -27,7 +27,13 @@ class HFImageDataset(Dataset):
         except ImportError:
             raise ImportError('Please install datasets with `pip install datasets`.')
 
-        self.df = load_dataset(name, split=split)
+        if name == 'food101' and split == 'test':
+            split = 'validation'
+
+        if name == 'keremberke/pokemon-classification':
+            self.df = load_dataset(name, 'full', split=split)
+        else:
+           self.df = load_dataset(name, split=split)
         self.size = len(self.df)
         self.image_key = image_key
         self.label_key = label_key
