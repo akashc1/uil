@@ -129,8 +129,10 @@ def build_optimizer_tx(config, params):
         mask=create_weight_decay_param_mask,
     )
     if not config.freeze_encoder:
+        logging.info("Continuing to train the encoder!")
         return adam
 
+    logging.info("Freezing the encoder!")
     optims = {'adam': adam, 'zero': optax.set_to_zero()}
     mask = freeze(
         traverse_util.path_aware_map(
@@ -216,8 +218,8 @@ def train_one_epoch(
         percent_complete = num_samples / samples_per_epoch * 100
 
         state, (loss, logits), rng = p_train_step(state, images, labels, rng)
-        loss = jax.tree_map(lambda x: x[0], loss)
-
+        state = jax.block_until_ready(state)  # wait for async computation to complete
+        loss = loss.mean()
         batch_time_m.update(time.time() - end)
         end = time.time()
 
@@ -371,6 +373,7 @@ def train(config):
         batch_size=config.batch_size,
         num_workers=config.num_workers,
         image_key=config.image_key,
+        label_key=config.label_key,
     )
     test_loader = get_hf_image_dataset(
         data=config.train_data,
@@ -379,6 +382,7 @@ def train(config):
         batch_size=config.batch_size // jax.device_count(),  # Just using one device for eval
         num_workers=config.num_workers // jax.device_count(),
         image_key=config.image_key,
+        label_key=config.label_key,
     )
 
     for epoch in range(config.epochs):
@@ -414,6 +418,7 @@ def main(argv):
         batch_size=config.batch_size // jax.device_count(),  # Just using one device for eval
         num_workers=config.num_workers // jax.device_count(),
         image_key=config.image_key,
+        label_key=config.label_key,
     )
     test_accuracy = eval_dataset(test_loader, final_state)
     if config.wandb:

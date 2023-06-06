@@ -36,6 +36,7 @@ def get_config():
     config.train_data = 'imagenet-1k'
     config.train_num_samples = 1281167
     config.image_key = 'image'
+    config.label_key = 'label'
 
     # dataloader
     config.num_workers = 8
