@@ -1,5 +1,5 @@
 import importlib
-base_config = importlib.import_module('configs.ViT-B-16.py')
+base_config = importlib.import_module('configs.ViT-B-16')
 
 
 def get_config():
