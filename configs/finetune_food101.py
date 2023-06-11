@@ -9,7 +9,7 @@ def get_config():
     config.label_key = 'label'
     config.train_num_samples = 75750
     config.num_classes = 101
-    config.batch_size = 256
+    config.batch_size = 1024
     # config.epochs = 1
 
     return config
